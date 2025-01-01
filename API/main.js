@@ -1,50 +1,88 @@
-const { MongoClient, corsnode,ObjectId } = require('mongodb');
-const url = 'mongodb+srv://muthusivanpillai:muthu1510@cluster0.8yxbp.mongodb.net/';
-const client = new MongoClient(url);
+require('dotenv').config();
+const { MongoClient } = require('mongodb');
+const express = require("express");
+const cors = require("cors");
+const jwt = require('jsonwebtoken');
 
-var express = require("express");
-var app = express();
+// Environment Variables
+const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://muthusivanpillai:muthu1510@cluster0.8yxbp.mongodb.net/';
+const PORT = process.env.PORT || 8888;
+const JWT_SECRET = process.env.JWT_SECRET || 'SECRET';
 
-var cors = require("cors");
+const app = express();
+const client = new MongoClient(MONGO_URL);
+
+// Middleware
 app.use(cors());
-var jwt = require('jsonwebtoken');
 app.use(express.json());
 
+let db;
 
+// Initialize MongoDB Connection
+(async () => {
+    try {
+        await client.connect();
+        db = client.db("Project");
+        console.log("Connected to MongoDB");
 
-app.post("/Reg",async(req,res)=>{
-    let {username,email,password,confirmPassword} = req.body;
-    const data = { username, email, password, confirmPassword };
+        // Start the server after DB connection is established
+        app.listen(PORT, () => {
+            console.log(`Server started on port ${PORT}`);
+        });
+    } catch (error) {
+        console.error("Error connecting to MongoDB:", error);
+        process.exit(1);
+    }
+})();
+
+// Routes
+
+// Registration
+app.post("/Reg", async (req, res) => {
+    const { username, email, password, confirmPassword } = req.body;
+
     if (!username || !email || !password || !confirmPassword) {
-        return res.status(400).json({success: false, message: 'All fields are required' });
-      }
-    
+        return res.status(400).json({ success: false, message: 'All fields are required' });
+    }
+
     if (password !== confirmPassword) {
         return res.status(400).json({ success: false, message: 'Passwords do not match' });
-      }
-    await client.connect();
-        let db = client.db("Project");
-        
-    await db.collection("login").insertOne(data);
-        return res.json({ success: true, message: "Registered successful!" });
-
-})
-
-/* The login code of express with jwt  */
-
-app.post("/login",async(req,res)=>{
-    let {email,password} = req.body;
-    await client.connect();
-    let db = client.db("Project");
-    let loginres = await db.collection("login").find({"email":email,"password":password}).toArray();
-    if (loginres.length>0){
-        var token = jwt.sign({"name":loginres[0]["email"]},'SECRET')
-        return res.json({ success: true, message: "Login successful!" });
-    }else{
-        return res.status(401).json({ success: false, message: "Invalid email or password." });
     }
-})
 
+    try {
+        const data = { username, email, password };
+        await db.collection("login").insertOne(data);
+        res.json({ success: true, message: "Registered successfully!" });
+    } catch (error) {
+        console.error("Error during registration:", error);
+        res.status(500).json({ success: false, message: "Failed to register" });
+    }
+});
+
+// Login
+app.post("/login", async (req, res) => {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+        return res.status(400).json({ success: false, message: 'Email and password are required' });
+    }
+
+    try {
+        const user = await db.collection("login").findOne({ email, password });
+
+        if (!user) {
+            return res.status(401).json({ success: false, message: "Invalid email or password." });
+        }
+
+        const token = jwt.sign({ email: user.email }, JWT_SECRET, { expiresIn: '1h' });
+        res.json({ success: true, token, message: "Login successful!" });
+    } catch (error) {
+        console.error("Error during login:", error);
+        res.status(500).json({ success: false, message: "Failed to login" });
+    }
+});
+
+// User Management
 app.post('/user', async (req, res) => {
     const { firstname, lastname, email, address, contactno, city, state, password } = req.body;
 
@@ -53,154 +91,109 @@ app.post('/user', async (req, res) => {
     }
 
     try {
-        // Connect to MongoDB
-        const db = client.db("Project");
-
-        // Check if a user with the given email exists
         const existingUser = await db.collection("Details").findOne({ email });
 
         if (existingUser) {
-            // Update the existing user
             await db.collection("Details").updateOne(
-                { email }, // Filter
-                {
-                    $set: {
-                        firstname: firstname || existingUser.firstname,
-                        lastname: lastname || existingUser.lastname,
-                        address: address || existingUser.address,
-                        contactno: contactno || existingUser.contactno,
-                        city: city || existingUser.city,
-                        state: state || existingUser.state,
-                    },
-                }
+                { email },
+                { $set: { firstname, lastname, address, contactno, city, state } }
             );
             return res.status(200).json({ message: 'User updated successfully' });
         } else {
-            // Create a new user
-            const newUser = {
-                firstname,
-                lastname,
-                email,
-                address,
-                contactno,
-                city,
-                state,
-                password
-            };
+            const newUser = { firstname, lastname, email, address, contactno, city, state, password };
             await db.collection("Details").insertOne(newUser);
             return res.status(201).json({ message: 'User created successfully', user: newUser });
         }
     } catch (error) {
-        console.error(error);
-        return res.status(500).json({ message: 'Internal server error', error: error.message });
+        console.error("Error managing user:", error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 });
 
-app.post("/Feedback",async(req,res)=>{
-    let {name,email,review_star,review} = req.body;
-    const data = { name, email, review_star, review };
-    if (!name || !email || !review_star || !review) {
-        return res.status(400).json({success: false, message: 'All fields are required' });
-      }
-    await client.connect();
-        let db = client.db("Project");
-        
-    await db.collection("feedback").insertOne(data);
-        return res.json({ success: true, message: "Review added successfully!" });
+// Feedback
+app.post("/Feedback", async (req, res) => {
+    const { name, email, review_star, review } = req.body;
 
-})
+    if (!name || !email || !review_star || !review) {
+        return res.status(400).json({ success: false, message: 'All fields are required' });
+    }
+
+    try {
+        const data = { name, email, review_star, review };
+        await db.collection("feedback").insertOne(data);
+        res.json({ success: true, message: "Review added successfully!" });
+    } catch (error) {
+        console.error("Error adding feedback:", error);
+        res.status(500).json({ success: false, message: "Failed to add feedback" });
+    }
+});
 
 app.get('/disfeedback', async (req, res) => {
     try {
-      const db = client.db('Project'); // Use 'Project' database
-      const collection = db.collection('feedback'); // Use 'Feedback' collection
-      
-      // Fetch feedback with specific fields: name, reviewStars, and review
-      const feedback = await collection.find({}, { projection: { _id: 0, name: 1, review_star: 1, review: 1 } }).toArray();
-      
-      // Send the feedback as a JSON response
-      res.json(feedback);
+        const feedback = await db.collection("feedback").find({}, { projection: { _id: 0, name: 1, review_star: 1, review: 1 } }).toArray();
+        res.json(feedback);
     } catch (error) {
-      res.status(500).json({ error: 'Error fetching feedback data' });
+        console.error("Error fetching feedback:", error);
+        res.status(500).json({ error: 'Error fetching feedback data' });
     }
-  });
-  
+});
 
-  app.post("/saveDetails", async (req, res) => {
+// Product Details
+app.post("/saveDetails", async (req, res) => {
     const { title, tagline } = req.body;
-  
-    // Validate that both title and tagline are provided
+
     if (!title || !tagline) {
-      return res.status(400).json({ success: false, message: "Both title and tagline are required" });
+        return res.status(400).json({ success: false, message: "Both title and tagline are required" });
     }
-  
-    try {
-      await client.connect();
-      const db = client.db("Project");
-  
-      // Create a new document with the title and tagline
-      const data = { title, tagline };
-  
-      // Insert the data into the "details" collection
-      await db.collection("products").insertOne(data);
-  
-      return res.json({ success: true, message: "Details saved successfully!" });
-    } catch (error) {
-      console.error("Error saving details:", error);
-      return res.status(500).json({ success: false, message: "Failed to save details" });
-    }
-  });
-  
 
-  app.get('/cartItems', async (req, res) => {
-    const db = client.db('Project');
-    const cartItems = await db.collection('products').find({}).toArray();
-  
-    // Add a default quantity if not present
-    const formattedCartItems = cartItems.map(item => ({
-      ...item,
-      quantity: item.quantity || 1,
-    }));
-  
-    res.json(formattedCartItems);
-  });
-  
-  app.post("/addReview", async (req, res) => {
+    try {
+        const data = { title, tagline };
+        await db.collection("products").insertOne(data);
+        res.json({ success: true, message: "Details saved successfully!" });
+    } catch (error) {
+        console.error("Error saving details:", error);
+        res.status(500).json({ success: false, message: "Failed to save details" });
+    }
+});
+
+app.get('/cartItems', async (req, res) => {
+    try {
+        const cartItems = await db.collection("products").find({}).toArray();
+        const formattedCartItems = cartItems.map(item => ({ ...item, quantity: item.quantity || 1 }));
+        res.json(formattedCartItems);
+    } catch (error) {
+        console.error("Error fetching cart items:", error);
+        res.status(500).json({ message: "Failed to fetch cart items" });
+    }
+});
+
+// Reviews
+app.post("/addReview", async (req, res) => {
     const { name, review } = req.body;
-  
+
     if (!name || !review) {
-      return res.status(400).json({ message: "Name and review are required" });
+        return res.status(400).json({ message: "Name and review are required" });
     }
-  
+
     try {
-      const newReview = { name, review, createdAt: new Date() };
-      let db = client.db("Project");
-      await db.collection("Review").insertOne(newReview);
-  
-      res.status(201).json({ message: "Review added successfully"});
+        const newReview = { name, review, createdAt: new Date() };
+        await db.collection("Review").insertOne(newReview);
+        res.status(201).json({ message: "Review added successfully" });
     } catch (error) {
-      console.error("Error adding review:", error);
-      res.status(500).json({ message: "Failed to add review" });
+        console.error("Error adding review:", error);
+        res.status(500).json({ message: "Failed to add review" });
     }
-  });
-  
-  app.get("/getReviews", async (req, res) => {
+});
+
+app.get("/getReviews", async (req, res) => {
     try {
-      let db = client.db("Project");
-      const reviews = await db.collection("Review").find().sort({ createdAt: -1 }).toArray();
-      res.status(200).json(reviews);
+        const reviews = await db.collection("Review").find().sort({ createdAt: -1 }).toArray();
+        res.status(200).json(reviews);
     } catch (error) {
-      console.error("Error fetching reviews:", error);
-      res.status(500).json({ message: "Failed to fetch reviews" });
+        console.error("Error fetching reviews:", error);
+        res.status(500).json({ message: "Failed to fetch reviews" });
     }
-  });
-
-
-
-app.listen(8888,()=>{
-    console.log("server Started")
-})
-
+});
 
 
 /* the API for editing the password with phone otp or email otp  */
